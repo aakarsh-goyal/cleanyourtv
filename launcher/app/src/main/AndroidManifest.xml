@@ -9,6 +9,11 @@
 
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
+    <!-- Control Centre: Wi-Fi and Bluetooth switches. Weather: one small Open-Meteo request (Weather.java). -->
+    <uses-permission android:name="android.permission.CHANGE_WIFI_STATE" />
+    <uses-permission android:name="android.permission.BLUETOOTH" />
+    <uses-permission android:name="android.permission.BLUETOOTH_ADMIN" />
+    <uses-permission android:name="android.permission.INTERNET" />
     <!-- Needed since Android 10 to read the Wi-Fi network name for the network pill. Never requested at
          runtime: build-and-install grants it with pm grant, so lint's Android 12 "ask for COARSE with
          FINE" rule does not apply here. -->
@@ -70,7 +75,11 @@
         <provider android:authorities="com.skyworth.tv.sdk.provider" />
     </queries>
 
+    <!-- Volume pill drawn over any app (VolumeHud). Granted at install with: appops set <pkg> SYSTEM_ALERT_WINDOW allow. -->
+    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
+
     <application
+        android:name=".TvApp"
         android:label="@string/app_name"
         android:icon="@mipmap/ic_launcher"
         android:banner="@drawable/banner"
@@ -131,6 +140,21 @@
         <!-- Remote Settings button panel (settings_key_panel); own task so the app behind stays put.
              No screenOrientation: a translucent activity may not request one on Android 8.0 (API 26),
              which throws IllegalStateException in onCreate (#1122); a TV is landscape anyway. -->
+        <!-- The standby screen (replaces Google's Backdrop): a black, white-only, left-half clock and calendar. See AodDream. -->
+        <service
+            android:name=".AodDream"
+            android:exported="true"
+            android:label="@string/app_name"
+            android:permission="android.permission.BIND_DREAM_SERVICE">
+            <intent-filter>
+                <action android:name="android.service.dreams.DreamService" />
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
+        </service>
+        <!-- The idle check for the AirPlay receiver (AirPlayControl). -->
+        <receiver
+            android:name=".AirPlayIdleReceiver"
+            android:exported="false"></receiver>
         <activity
             android:name=".QuickSettingsActivity"
             android:exported="false"

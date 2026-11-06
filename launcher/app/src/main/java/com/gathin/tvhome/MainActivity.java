@@ -184,6 +184,28 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
     private TextView greeting;
     private View clockBlock;
     private View btnInputs;
+    private boolean reorderOffered;
+    /** Split layout (config.xml split_layout): static clock and calendar on the left, the app grid on the right. */
+    private boolean split;
+    private boolean sortByUsage;
+    /** Festival of the day or of the week (FestivalCalendar), worked out once a day and re-shown on each visit to Home. */
+    private FestivalCalendar.Day festDay;
+    private LocalDate festDate;
+    private int festRotate;
+    private int usageSeen;
+    private TextView splitFocusName;
+    private MonthCalendarView splitCalendar;
+    private WifiBarsView splitNetBars;
+    private TextView splitNetName, splitNetQuality;
+    /** Signal-strength changes (Android 9 has no callback for them) are followed only while Home is in front. */
+    private final BroadcastReceiver rssiReceiver = new BroadcastReceiver() {
+        @Override public void onReceive(Context c, Intent i) { handler.post(MainActivity.this::updateWifiLabel); }
+    };
+    private boolean rssiRegistered;
+    private View weatherBox;
+    private WeatherBackdropView weatherBg;
+    private WeatherIconView weatherIcon;
+    private TextView weatherTemp;
     /** config show_inputs_pill: false keeps the Inputs pill hidden even when the TV has inputs. */
     private boolean showInputsPill = true;
     private TextView btnWifi;
@@ -646,7 +668,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
                     else dx = 0;
                     if (dx == 0) return false;
                     if (immediate || reducedMotion || !animations) parent.scrollBy(dx, 0);
-                    else parent.smoothScrollBy(dx, 0);
+                    else parent.smoothScrollBy(dx, 0, Motion.EASE, Motion.scrollMs(dx));
                     return true;
                 }
                 if (dockRow && getPosition(child) < COLUMNS) return false;
@@ -662,7 +684,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
                 else dy = Math.min(top, bottom - limitBottom);
                 if (dy == 0) return false;
                 if (immediate || reducedMotion || !animations) parent.scrollBy(0, dy);
-                else parent.smoothScrollBy(0, dy);
+                else parent.smoothScrollBy(0, dy, Motion.EASE, Motion.scrollMs(dy));
                 return true;
             }
         });
@@ -689,7 +711,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         // Reduced motion: the tiles are simply there, with no entrance (reloadApps skips it there too).
         if (animations && !reducedMotion) {
             grid.setLayoutAnimation(new LayoutAnimationController(
-                    AnimationUtils.loadAnimation(this, R.anim.tile_enter), 0.06f));
+                    AnimationUtils.loadAnimation(this, R.anim.tile_enter), 0.04f));
         }
         adapter = new AppAdapter(this, this, COLUMNS, cfg);
         dockApps = cfg.dockApps;
@@ -805,12 +827,9 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         for (SpringAnimation s : new SpringAnimation[]{springX, springY}) {
             if (reducedMotion) {
                 Motion.reduce(s);
-            } else if (!focusOvershoot) {
-                // Critically damped: glides straight onto the tile without swinging past it.
-                s.setSpring(new SpringForce().setStiffness(advancedEffects ? 520f : 440f).setDampingRatio(1f));
             } else {
-                s.setSpring(new SpringForce().setStiffness(advancedEffects ? 320f : 260f)
-                        .setDampingRatio(advancedEffects ? 0.76f : 0.58f));
+                // The same spring the tile uses, so the highlight and the tile it sits on move as one.
+                s.setSpring(Motion.focus(focusOvershoot));
             }
         }
 
@@ -835,10 +854,17 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         });
         btnReorder = findViewById(R.id.btnReorder);
         btnReorder.setOnClickListener(v -> toggleReorder());
+        reorderOffered = cfg.reorderButton;
         btnReorder.setVisibility(cfg.reorderButton ? View.VISIBLE : View.GONE);
         if (!cfg.showNetworkPill) btnWifi.setVisibility(View.GONE);
         showInputsPill = cfg.showInputsPill;
         showInputsMenuRow = cfg.showInputsPill;
+        weatherBox = findViewById(R.id.weatherBox);
+        weatherBg = findViewById(R.id.weatherBg);
+        weatherBg.setAnimate(animations && !reducedMotion);
+        weatherIcon = findViewById(R.id.weatherIcon);
+        weatherTemp = findViewById(R.id.weatherTemp);
+        weatherIcon.setAnimate(animations && !reducedMotion);
         btnLibraryTop = findViewById(R.id.btnLibraryTop);
         btnLibraryTop.setOnClickListener(v -> {
             onLibraryRequested();
@@ -952,6 +978,8 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
                 registerReceiver(wakeReceiver, new IntentFilter(Intent.ACTION_SCREEN_ON));
             }
         }
+
+        applySplitLayout();
 
         ConnectivityManager cm = getSystemService(ConnectivityManager.class);
         TvInputManager tim = (TvInputManager) getSystemService(TV_INPUT_SERVICE);
@@ -1085,6 +1113,22 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
     protected void onResume() {
         super.onResume();
         resumed = true;
+        weatherIcon.setActive(true);
+        weatherBg.setActive(true);
+        festRotate++;
+        festDate = null;       // re-read the day (and pick the next tidbit) on every visit to Home
+        AirPlayControl.reconcile(this);
+        if (split && !rssiRegistered) {
+            registerReceiver(rssiReceiver, new IntentFilter(WifiManager.RSSI_CHANGED_ACTION));
+            rssiRegistered = true;
+        }
+        if (splitCalendar != null) splitCalendar.refresh();
+        if (sortByUsage && usageSeen != UsageCount.revision()) {
+            // An app was opened from a tile: the most-used order may have changed. Re-sort, keeping focus on the same app.
+            usageSeen = UsageCount.revision();
+            reloadApps(false, true, false);
+        }
+        updateWeather();
         // A festival that started or ended while Home was in the background: rebuild with or without it.
         if (festive != festival.active(LocalDate.now())) {
             recreate();
@@ -1301,6 +1345,15 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
     protected void onPause() {
         super.onPause();
         resumed = false;
+        weatherIcon.setActive(false);
+        weatherBg.setActive(false);
+        if (rssiRegistered) {
+            try {
+                unregisterReceiver(rssiReceiver);
+            } catch (IllegalArgumentException ignored) {
+            }
+            rssiRegistered = false;
+        }
         // No UP reaches a paused Home, so a vendor-key hold it saw go down would still open its app later.
         // Only Home's own share is dropped: a key service that saw the same DOWN keeps its hold.
         RemoteKeys.release(this);
@@ -1798,6 +1851,9 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
     public void onTileFocused(int position, View card) {
         lastFocused = position;
         lastFocusedKey = adapter.keyAt(position);
+        if (split) showSplitName(adapter.labelAt(position));
+        weatherBg.setAccent(adapter.ambientColorAt(position));
+        weatherBg.pauseFor(700);
         // Focus restored before the first layout (cold start): the tile has no size yet, and the glass
         // would be sized to 2*pad. Run again once the tile is laid out.
         if (card.getWidth() == 0) {
@@ -1816,7 +1872,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         float h = card.getHeight() * scale + 2 * pad;
         float x = r.exactCenterX() - w / 2f;
         // advanced_effects lifts a focused grid tile by 4dp and the glass follows it; dock tiles stay put (#2135).
-        boolean lifted = advancedEffects && !DockSlots.inDockRow(dockRow, singleRow, position, COLUMNS);
+        boolean lifted = advancedEffects && !split && !DockSlots.inDockRow(dockRow, singleRow, position, COLUMNS);
         float y = r.exactCenterY() - h / 2f - (lifted ? 4f * density : 0f);
 
         ViewGroup.LayoutParams lp = glass.getLayoutParams();
@@ -1943,11 +1999,11 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
             heroShown = true;
         } else if (changed) {
             if (advancedEffects) hero.animate().cancel();
-            hero.animate().alpha(0f).translationX(-12 * density).setDuration(120).withEndAction(() -> {
+            hero.animate().alpha(0f).translationX(-12 * density).setDuration(90).setInterpolator(Motion.EASE).withEndAction(() -> {
                 fillHero(position, label);
                 hero.setY(y);
                 hero.setTranslationX(12 * density);
-                hero.animate().alpha(1f).translationX(0f).setDuration(200).start();
+                hero.animate().alpha(1f).translationX(0f).setDuration(240).setInterpolator(Motion.EASE).start();
             }).start();
             if (ambientGlow && advancedEffects) {
                 transitionAmbient(color);
@@ -2046,9 +2102,9 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
             fadeHeroArt(600);
             return;
         }
-        heroArt.animate().alpha(0f).setDuration(140).withEndAction(() -> {
+        heroArt.animate().alpha(0f).setDuration(100).withEndAction(() -> {
             heroArt.setImageBitmap(next);
-            heroArt.animate().alpha(heroArtAlpha).setDuration(420).start();
+            heroArt.animate().alpha(heroArtAlpha).setDuration(320).setInterpolator(Motion.EASE).start();
         }).start();
     }
 
@@ -2168,7 +2224,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         }
         ambient.animate().alpha(1f).setDuration(180).start();
         ambientAnimator = ValueAnimator.ofObject(new ArgbEvaluator(), ambientColor, color);
-        ambientAnimator.setDuration(360);
+        ambientAnimator.setDuration(320);
         ambientAnimator.addUpdateListener(animation -> setAmbient((int) animation.getAnimatedValue()));
         ambientAnimator.start();
     }
@@ -2445,6 +2501,11 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
             if (forward && position == adapter.focusablePosition(count - 1) && adapter.isLibraryAt(count)) {
                 focusLibrary();
                 return true;
+            }
+            // Split layout: Left from the first column reaches the controls in the left pane.
+            if (split && !forward && position % COLUMNS == 0) {
+                View gear = findViewById(R.id.btnSettings);
+                if (gear.getVisibility() == View.VISIBLE && gear.requestFocus()) return true;
             }
             // In the dock, the last app is the row's end: the empty slots after it take no focus.
             int rowCount = position < COLUMNS ? Math.min(count, adapter.dockFilled()) : count;
@@ -2751,6 +2812,16 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
             else if (hour < 22) res = R.string.good_evening;
             else res = R.string.good_night;
         }
+        refreshFestivalDay();
+        if (festDay != null && festDay.today) {
+            // The calendar's festival of the day: "Happy Dhanteras Goyals!"
+            String wish = festDay.info.greeting;
+            greeting.setText(greetingName.isEmpty() ? wish : getString(R.string.greeting_with_name, wish, greetingName));
+            greeting.setTextColor(liftTowardsWhite(festDay.info.accent, 0.3f));
+            if (shamsi) shamsiDate.setText(Shamsi.today(getResources()));
+            if (lunar) lunarDate.setText(Lunar.today(getResources(), lunarOffset));
+            return;
+        }
         String festiveGreeting = festive ? festival.greetingText(getResources()) : "";
         if (!festiveGreeting.isEmpty()) {
             greeting.setText(festiveGreeting);
@@ -2964,6 +3035,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
             }
         } catch (Exception ignored) {
         }
+        updateSplitNetwork(text, online, flame);
         // With a VPN app configured, a VPN that is down matters too: show a red "VPN off" capsule then.
         boolean vpnDown = !vpn && online && !vpnApp.isEmpty();
         if (vpnPill) updateVpnPill(vpn);
@@ -3015,6 +3087,16 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
                 btnWifi.setCompoundDrawableTintList(tint);
             }
         }
+    }
+
+    /** The left pane's network line: name, bars and a word for the signal. */
+    private void updateSplitNetwork(String name, boolean online, int level) {
+        if (!split || splitNetName == null) return;
+        splitNetName.setText(name);
+        splitNetBars.setLevel(online ? level : 0);
+        int res = !online ? R.string.offline : level >= 4 ? R.string.signal_excellent : level == 3 ? R.string.signal_good
+                : level == 2 ? R.string.signal_fair : R.string.signal_weak;
+        splitNetQuality.setText(res);
     }
 
     /** config.xml icon_only_buttons. */
@@ -3615,13 +3697,33 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
 
     /** Drop in: fade and unfold from the top edge, hanging under the anchor pill. */
     private void dropIn(PopupWindow popup, View panel, View anchor, int gravity) {
+        int gap = (int) (10 * density);
+        panel.measure(View.MeasureSpec.UNSPECIFIED, View.MeasureSpec.UNSPECIFIED);
+        int ph = panel.getMeasuredHeight();
+        int pw = popup.getWidth() > 0 ? popup.getWidth() : panel.getMeasuredWidth();
+        int[] at = new int[2];
+        anchor.getLocationInWindow(at);
+        int below = root.getHeight() - (at[1] + anchor.getHeight() + gap);
+        int above = at[1] - gap;
+        boolean up = ph > below && above > below;   // a bottom-of-screen anchor (the gear in the left pane) opens upwards
         panel.setAlpha(0f);
-        panel.setPivotY(0f);
-        panel.setScaleY(0.92f);
-        panel.setTranslationY(-8 * density);
-        popup.showAsDropDown(anchor, 0, (int) (10 * density), gravity);
-        panel.animate().alpha(1f).scaleY(1f).translationY(0f).setDuration(reducedMotion ? Motion.REDUCED_MS : 220)
-                .setInterpolator(new android.view.animation.DecelerateInterpolator(1.6f)).start();
+        if (up) {
+            // Aligned to the anchor's left (START) or right (END) edge, kept inside the screen.
+            int x = gravity == Gravity.END ? at[0] + anchor.getWidth() - pw : at[0];
+            x = Math.max(gap, Math.min(x, root.getWidth() - pw - gap));
+            if (ph > above) popup.setHeight(Math.max(1, above));   // a very long list is cut to the room there is
+            panel.setPivotY(ph);
+            panel.setScaleY(0.92f);
+            panel.setTranslationY(8 * density);
+            popup.showAtLocation(root, Gravity.TOP | Gravity.START, x, Math.max(0, at[1] - gap - Math.min(ph, above)));
+        } else {
+            panel.setPivotY(0f);
+            panel.setScaleY(0.92f);
+            panel.setTranslationY(-8 * density);
+            popup.showAsDropDown(anchor, 0, gap, gravity);
+        }
+        panel.animate().alpha(1f).scaleY(1f).translationY(0f).setDuration(reducedMotion ? Motion.REDUCED_MS : 260)
+                .setInterpolator(Motion.EASE).start();
     }
 
     private View addSeparator(LinearLayout rows) {
@@ -3663,32 +3765,199 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
     // ---- launcher settings and module cards -------------------------------------------------------
 
     /** top_menu: the gear's dropdown, standing in for the Inputs, Wi-Fi and Settings pills. */
+    /**
+     * Split layout: the header (greeting, clock, date, buttons) leaves the top and becomes a static left pane with a
+     * big clock, a month calendar, the focused app's name and the controls at the bottom; the grid moves right. Views
+     * are moved, not copied, so every other code path that touches them keeps working.
+     */
+    private void applySplitLayout() {
+        split = getResources().getBoolean(R.bool.split_layout) && !singleRow;
+        if (!split) return;
+        View pane = findViewById(R.id.leftPane);
+        int paneW = Math.round(getResources().getDisplayMetrics().widthPixels * 0.44f);
+        pane.getLayoutParams().width = paneW;
+        pane.setVisibility(View.VISIBLE);
+        View main = findViewById(R.id.mainColumn);
+        main.setPadding(paneW, main.getPaddingTop(), main.getPaddingRight(), main.getPaddingBottom());
+
+        View greetingView = findViewById(R.id.greeting);
+        ((ViewGroup) greetingView.getParent()).removeView(greetingView);
+        ((ViewGroup) findViewById(R.id.splitGreetingHolder)).addView(greetingView,
+                new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+        View buttons = findViewById(R.id.topButtons);
+        ((ViewGroup) buttons.getParent()).removeView(buttons);
+        ((ViewGroup) findViewById(R.id.splitControls)).addView(buttons, 0,
+                new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+        splitNetBars = findViewById(R.id.splitNetBars);
+        splitNetName = findViewById(R.id.splitNetName);
+        splitNetQuality = findViewById(R.id.splitNetQuality);
+        ((View) findViewById(R.id.leftBlock).getParent()).setVisibility(View.GONE);
+
+        weatherBox = findViewById(R.id.splitWeatherBox);
+        weatherIcon = findViewById(R.id.splitWeatherIcon);
+        weatherTemp = findViewById(R.id.splitWeatherTemp);
+        weatherIcon.setAnimate(false);   // the backdrop carries the motion: a 60 fps icon loop made the whole window repaint
+        splitFocusName = findViewById(R.id.splitFocusName);
+        splitCalendar = findViewById(R.id.splitCalendar);
+        adapter.setHideNames(true);
+        sortByUsage = getResources().getBoolean(R.bool.sort_by_usage);
+        adapter.setSortByUsage(sortByUsage);
+        usageSeen = UsageCount.revision();
+        // Right from a control goes back to the apps, on the tile you left.
+        ViewGroup bar = (ViewGroup) buttons;
+        for (int i = 0; i < bar.getChildCount(); i++) {
+            bar.getChildAt(i).setOnKeyListener((v, keyCode, event) -> {
+                if (keyCode != KeyEvent.KEYCODE_DPAD_RIGHT || event.getAction() != KeyEvent.ACTION_DOWN) return false;
+                focusTile(Math.max(0, Math.min(lastFocused, adapter.appCount() - 1)));
+                return true;
+            });
+        }
+    }
+
+    private void showSplitName(String label) {
+        if (splitFocusName == null || label == null || label.contentEquals(splitFocusName.getText())) return;
+        splitFocusName.animate().cancel();
+        splitFocusName.setText(label);
+        if (!animations || reducedMotion) {
+            splitFocusName.setAlpha(1f);
+            return;
+        }
+        splitFocusName.setAlpha(0f);
+        splitFocusName.setTranslationY(6 * density);
+        splitFocusName.animate().alpha(1f).translationY(0f).setDuration(240).setInterpolator(Motion.EASE).start();
+    }
+
+    /** Looks the date up once a day; a preview file festival_date.txt (an ISO date) in the app's files folder overrides it. */
+    private void refreshFestivalDay() {
+        LocalDate today = LocalDate.now();
+        try {
+            java.io.File f = new java.io.File(getExternalFilesDir(null), "festival_date.txt");
+            if (f.isFile()) {
+                try (java.util.Scanner sc = new java.util.Scanner(f, "UTF-8")) {
+                    today = LocalDate.parse(sc.nextLine().trim());
+                }
+            }
+        } catch (Exception ignored) {
+        }
+        if (today.equals(festDate)) return;
+        festDate = today;
+        festDay = FestivalCalendar.current(this, today);
+        showFestival();
+    }
+
+    /** The festival card in the left pane and the decoration behind the window. */
+    private void showFestival() {
+        View card = findViewById(R.id.splitFestival);
+        if (!split || card == null) return;
+        FestivalCalendar.Day d = festDay;
+        if (d == null) {
+            card.setVisibility(View.GONE);
+            weatherBg.setFestival(WeatherBackdropView.FEST_NONE, 0, 0, 0, false);
+            return;
+        }
+        FestivalCalendar.Info info = d.info;
+        int accent = liftTowardsWhite(info.accent, 0.2f);
+        TextView name = findViewById(R.id.festivalName);
+        String when = d.today ? "" : d.daysUntil == 1 ? " tomorrow" : " in " + d.daysUntil + " days";
+        name.setText(info.name + when);
+        name.setTextColor(accent);
+        TextView tid = findViewById(R.id.festivalTidbit);
+        tid.setText(info.tidbits[(int) ((festDate.toEpochDay() + festRotate) % info.tidbits.length)]);
+        ((FestivalGlyphView) findViewById(R.id.festivalGlyph)).set(info.key, info.accent);
+        card.setVisibility(View.VISIBLE);
+
+        int mode = "holi".equals(info.key) ? WeatherBackdropView.FEST_COLORS
+                : "christmas".equals(info.key) ? WeatherBackdropView.FEST_SNOW
+                : "rakhi".equals(info.key) || "bhaidooj".equals(info.key) ? WeatherBackdropView.FEST_PETALS
+                : WeatherBackdropView.FEST_LIGHTS;
+        int c0 = info.accent, c1 = liftTowardsWhite(info.accent, 0.55f), c2 = 0xFFFFFFFF;
+        if (mode == WeatherBackdropView.FEST_COLORS) { c0 = 0xFFFF4DA6; c1 = 0xFF3DDC97; c2 = 0xFF4DA6FF; }
+        if (mode == WeatherBackdropView.FEST_SNOW) { c0 = 0xFFFFFFFF; c1 = 0xFFFF453A; c2 = 0xFF30D158; }
+        // The mood builds for the three days before; the garland goes up on the day itself.
+        boolean decorate = d.today || d.daysUntil <= 3;
+        weatherBg.setFestival(decorate ? mode : WeatherBackdropView.FEST_NONE, c0, c1, c2, d.today);
+    }
+
+    /** Weather beside the clock: shows the last answer at once and asks Open-Meteo only when it is over 30 minutes old. */
+    private void updateWeather() {
+        String city = getString(R.string.weather_city);
+        if (city.trim().isEmpty()) return;
+        final boolean f = getResources().getBoolean(R.bool.weather_fahrenheit);
+        Weather.refresh(this, city, (code, day, tempC, windKmh, cloudPct, precipMm, aqi) -> {
+            weatherIcon.setWeather(code, day);
+            weatherTemp.setText(f ? Math.round(tempC * 9f / 5f + 32f) + "\u00B0" : tempC + "\u00B0");
+            weatherBox.setVisibility(View.VISIBLE);
+            weatherIcon.setActive(resumed);
+            weatherBg.setWeather(code, day, windKmh, cloudPct, precipMm);
+            weatherBg.setHaze(aqi);
+            showAqi(aqi);
+        });
+    }
+
+    /** US AQI as a small coloured pill beside the temperature: green to maroon along the EPA bands. */
+    private void showAqi(int aqi) {
+        TextView pill = findViewById(R.id.splitAqi);
+        if (pill == null) return;
+        if (aqi < 0) {
+            pill.setVisibility(View.GONE);
+            return;
+        }
+        int bg = aqi <= 50 ? 0xFF30D158 : aqi <= 100 ? 0xFFFFD60A : aqi <= 150 ? 0xFFFF9F0A : aqi <= 200 ? 0xFFFF453A
+                : aqi <= 300 ? 0xFFBF5AF2 : 0xFF9C2A55;
+        android.graphics.drawable.GradientDrawable d = new android.graphics.drawable.GradientDrawable();
+        d.setColor(bg);
+        d.setCornerRadius(10 * density);
+        pill.setBackground(d);
+        pill.setTextColor(aqi <= 100 ? 0xFF1C1C1E : 0xFFFFFFFF);
+        pill.setText("AQI " + aqi);
+        pill.setVisibility(View.VISIBLE);
+    }
+
     private void showTopMenu() {
         View anchor = findViewById(R.id.btnSettings);
-        View panel = getLayoutInflater().inflate(R.layout.popup_inputs, root, false);
-        LinearLayout rows = panel.findViewById(R.id.rows);
-        PopupWindow popup = glassPopup(panel, (int) (220 * density));
-        // Inputs opens its own list once this one has closed.
-        if (showInputsMenuRow) addInputRow(rows, popup, R.drawable.ic_input, getString(R.string.inputs), -1, () -> root.post(this::showInputs));
-        addInputRow(rows, popup, R.drawable.ic_wifi, getString(R.string.quick_network), -1, this::openNetworkPill);
-        CharSequence network = wifiIconOnly ? btnWifi.getContentDescription() : btnWifi.getText();
-        if (!TextUtils.isEmpty(network)) {
-            TextView status = rows.getChildAt(rows.getChildCount() - 1).findViewById(R.id.status);
-            status.setText(network);
-            status.setVisibility(View.VISIBLE);
-        }
-        addInputRow(rows, popup, R.drawable.ic_swap_vert, getString(R.string.reorder), -1, this::toggleReorder);
-        if (launcherSettingsButton) {
-            addInputRow(rows, popup, R.drawable.ic_home_settings_pill, getString(R.string.launcher_settings), -1,
-                    () -> startActivityForResult(new Intent(this, LauncherSettingsActivity.class), LAUNCHER_SETTINGS_REQUEST));
-        } else {
-            addInputRow(rows, popup, R.drawable.ic_settings, getString(R.string.settings), -1,
-                    () -> open(systemIntent(Settings.ACTION_SETTINGS)));
-        }
+        final PopupWindow[] popup = new PopupWindow[1];
+        ControlCenter panel = new ControlCenter(this, new ControlCenter.Callbacks() {
+            @Override public void openInputs() { root.post(MainActivity.this::showInputs); }
+            @Override public void openSettings() { open(systemIntent(Settings.ACTION_SETTINGS)); }
+            @Override public void openIntent(Intent intent) { open(intent); }
+            @Override public Runnable launcherSettings() {
+                return () -> startActivityForResult(new Intent(MainActivity.this, LauncherSettingsActivity.class), LAUNCHER_SETTINGS_REQUEST);
+            }
+            @Override public Runnable reorder() { return reorderOffered ? MainActivity.this::toggleReorder : null; }
+            @Override public void dismiss() { if (popup[0] != null) popup[0].dismiss(); }
+        });
+        popup[0] = glassPopup(panel, ViewGroup.LayoutParams.WRAP_CONTENT);
         panel.measure(View.MeasureSpec.UNSPECIFIED, View.MeasureSpec.UNSPECIFIED);
-        popup.setWidth(Math.max((int) (220 * density), Math.min(panel.getMeasuredWidth(), (int) (360 * density))));
-        dropIn(popup, panel, anchor, getResources().getBoolean(R.bool.rtl_menu_bar) ? Gravity.START : Gravity.END);
-        rows.getChildAt(0).requestFocus();
+        popup[0].setWidth(panel.getMeasuredWidth());
+        // Unfold from the gear's corner on the same spring the tiles use, like a macOS Control Centre popover.
+        boolean rtl = getResources().getBoolean(R.bool.rtl_menu_bar);
+        panel.setAlpha(0f);
+        panel.setScaleX(0.9f);
+        panel.setScaleY(0.9f);
+        if (split) {
+            // The gear sits at the bottom of the left pane: the panel opens upwards from it.
+            int[] at = new int[2];
+            anchor.getLocationOnScreen(at);
+            panel.setPivotX(0f);
+            panel.setPivotY(panel.getMeasuredHeight());
+            popup[0].showAtLocation(root, Gravity.TOP | Gravity.START, at[0], at[1] - panel.getMeasuredHeight() - (int) (10 * density));
+        } else {
+            panel.setPivotX(rtl ? 0f : panel.getMeasuredWidth());
+            panel.setPivotY(0f);
+            popup[0].showAsDropDown(anchor, 0, (int) (10 * density), rtl ? Gravity.START : Gravity.END);
+        }
+        if (reducedMotion || !animations) {
+            panel.setAlpha(1f);
+            panel.setScaleX(1f);
+            panel.setScaleY(1f);
+        } else {
+            panel.animate().alpha(1f).setDuration(160).start();
+            for (androidx.dynamicanimation.animation.DynamicAnimation.ViewProperty prop : new androidx.dynamicanimation.animation.DynamicAnimation.ViewProperty[]{
+                    androidx.dynamicanimation.animation.DynamicAnimation.SCALE_X, androidx.dynamicanimation.animation.DynamicAnimation.SCALE_Y}) {
+                new SpringAnimation(panel, prop).setSpring(Motion.focus(true).setFinalPosition(1f)).start();
+            }
+        }
+        panel.firstFocus().requestFocus();
     }
 
     /** The header opens launcher settings directly; hold OK keeps the extra home actions available. */
@@ -3860,7 +4129,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
             panel.setTranslationY(8 * density);
             popup.showAtLocation(root, Gravity.NO_GRAVITY, at[0], Math.max(0, at[1] - gap - height));
             panel.animate().alpha(1f).scaleY(1f).translationY(0f).setDuration(220)
-                    .setInterpolator(new android.view.animation.DecelerateInterpolator(1.6f)).start();
+                    .setInterpolator(Motion.EASE).start();
         }
         rows.getChildAt(0).requestFocus();
     }
