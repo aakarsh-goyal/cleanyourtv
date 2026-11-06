@@ -1,3 +1,109 @@
+<h1 align="center">CleanYourTV · Goyal edition</h1>
+
+<p align="center">
+  <em>A calm, fast home screen for an Android TV: a clock-and-calendar left half like iPhone StandBy,
+  the weather outside in the background, the day's festival, an AirPlay switch, and a black always-on standby.</em>
+</p>
+
+<p align="center">
+  <img src="docs/screenshots/home-dhanteras.jpg" width="900" alt="The home screen on Dhanteras: a marigold garland, a row of diyas, the festival card, the sunny weather and the app grid">
+</p>
+
+A personal fork of [CleanYourTV](#upstream-cleanyourtv), tuned for one Android TV 9 box (a 2 GB Realtek set) and **not meant for
+upstream**: it adds a network permission, Bluetooth and Wi-Fi switches and a local ADB client, which the project's rules keep
+out of the main launcher. Everything below lives in `launcher/` and is on by default through `config.xml`.
+
+## What it looks like
+
+| | |
+|---|---|
+| <img src="docs/screenshots/home-sunny.jpg" alt="Split home screen"> | <img src="docs/screenshots/control-centre.jpg" alt="Control Centre"> |
+| **Split home.** A static left half (greeting, big Roboto clock, date, weather and AQI, the month calendar, the focused app's name, the controls with Wi-Fi name and signal) and the apps on the right, sorted by how often you open them. | **Control Centre.** The gear opens a glass panel: Wi-Fi, Bluetooth, Inputs, Settings, and an **AirPlay** switch that starts the TV's receiver on demand and stops it again after 25 idle minutes. |
+| <img src="docs/screenshots/inputs-popup.jpg" alt="Inputs popup opening upwards"> | <img src="docs/screenshots/volume-pill.jpg" alt="Volume pill"> |
+| **Popups that fit.** Menus open upwards when their button is near the bottom, so the HDMI list is never cut off. | **Volume pill.** A liquid-glass level pill replaces the vendor's volume bar; it draws over any app. |
+
+### The weather outside
+
+Open-Meteo gives the temperature, wind, cloud cover, rain and US AQI for your city (`weather_city`). A small scene is drawn into its
+own surface *behind* the window, at a frame rate that suits each scene, and it pauses while you move the cursor, so the tiles never
+repaint for it. Smog haze builds as the AQI rises.
+
+| | | |
+|---|---|---|
+| <img src="docs/screenshots/home-sunny.jpg" alt="Sunny"> | <img src="docs/screenshots/weather-rain.jpg" alt="Rain"> | <img src="docs/screenshots/weather-night.jpg" alt="Clear night"> |
+| Sun, rays and dust | Rain | Moon and stars |
+| <img src="docs/screenshots/weather-storm.jpg" alt="Storm"> | <img src="docs/screenshots/weather-snow.jpg" alt="Snow"> | |
+| Storm | Snow | Fog and clouds too |
+
+### Festivals
+
+Hindu festivals and Christmas are on the calendar (`res/raw/festivals.csv`, built by `tools/festival_calendar.py` from open sources).
+On the day you get a greeting such as "Happy Dhanteras Goyals!", a card with the festival and a rotating tidbit, a countdown in the week
+before, and still decorations: a marigold garland, a row of diyas, fixed sparkles.
+
+| | | |
+|---|---|---|
+| <img src="docs/screenshots/festival-diwali.jpg" alt="Diwali"> | <img src="docs/screenshots/festival-holi.jpg" alt="Holi"> | <img src="docs/screenshots/festival-christmas.jpg" alt="Christmas"> |
+| Diwali | Holi | Christmas |
+
+### Standby
+
+<p align="center"><img src="docs/screenshots/standby.jpg" width="640" alt="The always-on standby: black, white text, the left half only"></p>
+
+After 15 idle minutes the TV shows `AodDream`, in the manner of Apple's always-on display: pitch black, the left half only, plain white,
+today in an outlined circle, nudged a few pixels a minute. Google's Backdrop screensaver is disabled.
+
+## Also in this fork
+
+- **Motion.** Focus, scrolling and app opening run on one spring (`Motion.java`) instead of timed animations; an app grows out of the tile
+  you pressed. No hardware layers, no blur.
+- **Fonts and spacing.** Roboto throughout the left half, mipmapped artwork, roomy gaps and a gentler zoom so a focused tile never runs
+  into its neighbours.
+
+## Install
+
+You need JDK 17 and the Android SDK (platform 34, build-tools 34.0.0); the TV needs network debugging on.
+
+```bash
+cd launcher && ./gradlew assembleRelease                      # app/build/outputs/apk/release/app-release.apk (~620 KB)
+adb connect <tv ip>:5555 && adb install -r app/build/outputs/apk/release/app-release.apk
+adb shell appops set com.gathin.tvhome SYSTEM_ALERT_WINDOW allow          # volume pill
+adb shell pm grant com.gathin.tvhome android.permission.ACCESS_FINE_LOCATION   # lets Android 9 show the Wi-Fi name
+adb shell settings put secure screensaver_components com.gathin.tvhome/.AodDream     # standby
+adb shell settings put secure screensaver_default_component com.gathin.tvhome/.AodDream
+adb shell pm disable-user --user 0 com.google.android.backdrop             # Google's screensaver (optional)
+```
+
+The first time you press the AirPlay tile the TV asks "Allow USB debugging?" for the launcher's own key: tick *Always allow*.
+Then Home as usual (see [The launcher](#the-launcher)). The defaults for this fork are in `launcher/app/src/main/res/values/config.xml`:
+`greeting_name`, `weather_city`, `weather_fahrenheit`, `split_layout`, `sort_by_usage`.
+
+**Preview without waiting for the weather or the date.** Put one of these in `/sdcard/Android/data/com.gathin.tvhome/files/` and press Home:
+`weather_override.json` (`{"code":63,"aqi":180}`: any WMO weather code, plus `day`, `wind`, `cloud`, `precip`, `aqi`) and
+`festival_date.txt` (an ISO date such as `2027-03-22` for Holi). Delete the files to go back to live data.
+
+## How it works, in short
+
+- **No GPU for the weather's sake.** This TV's GPU takes ~26 ms just to blend the screen at 1080p, so anything animated in the window
+  repaints everything. The weather is software-drawn off the UI thread into a small surface behind the window instead.
+- **AirPlay on demand.** The receiver is the TV's own FastCast system app. Stopping another app needs the shell's rights, so
+  `LocalAdb.java` talks to the TV's own `adbd` on localhost with an approved key and only ever sends the fixed commands in
+  `AirPlayControl.java`. Revoking USB-debugging authorisations in Developer options removes that access.
+- **Festival dates** come from [python-holidays](https://github.com/vacanza/python-holidays) and, for Raksha Bandhan, Ganesh Chaturthi
+  and Navratri, from the real positions of the Sun and Moon ([astronomy-engine](https://github.com/cosinekitty/astronomy)) with the usual
+  panchang rules; `python tools/festival_calendar.py --check` compares the rules with python-holidays.
+- **Data sources:** [Open-Meteo](https://open-meteo.com) for weather and air quality (no key, no account).
+
+The APK is about 620 KB, over the upstream 576 KB size gate, and the repo's test suite (the Keys table, the Hebrew layout's view ids)
+is kept passing.
+
+---
+
+## Upstream: CleanYourTV
+
+Everything above builds on the open-source [CleanYourTV](https://github.com/Gathin23/cleanyourtv) by Gathin23 (MIT). Its own README, kept
+below unchanged, covers debloating a TV, the supported models and restoring everything.
+
 <p align="center">
   <a href="https://cleanyour.tv"><img src="https://raw.githubusercontent.com/Gathin23/cleanyourtv/main/docs/banner.png" alt="CleanYourTV. Your TV, minus the ads. Strip the bloatware from any Android TV or Google TV over Wi-Fi and replace the ad-filled home screen with a clean launcher that looks like an Apple TV. No root, no cable, nothing uninstalled, and a one-line restore." width="800"></a>
 </p>
@@ -22,41 +128,6 @@
 <p align="center">
   <a href="docs/PRESS.md"><img src="docs/card.jpg" alt="450 TV models · 122 brands · 31 languages · 572 KB launcher. Featured in TechCrunch, TechRadar, Tom's Guide, Mashable, Android Authority, XDA, FlatpanelsHD, It's FOSS, Phandroid, GIGAZINE, Xataka, WinFuture, Frandroid, Macitynet, Techaeris, TechPP and 396 more: 412 articles from 54 countries. Before: stock Google TV home with a sponsored ad. After: the Clean Your TV launcher." width="800"></a>
 </p>
-
-## This fork
-
-[aakarsh-goyal/cleanyourtv](https://github.com/aakarsh-goyal/cleanyourtv) is a personal fork of the launcher, tuned for one
-Android TV 9 box (a 2 GB Realtek set) and **not meant for upstream**: it adds a network permission, Bluetooth and Wi-Fi
-switches and a local ADB client, which the project's rules keep out of the main launcher. Everything below is in
-`launcher/` and is on by default through `config.xml`.
-
-- **Split home screen.** A static left half like iPhone StandBy: greeting ("Good Evening Goyals!", set with `greeting_name`),
-  a big Roboto clock, the date, weather and AQI, a month calendar, the focused app's name, and the controls with the Wi-Fi
-  name and signal bars. The app grid sits on the right with small logos, roomy gaps, and apps sorted by how often you open them.
-- **Motion.** Focus, scrolling and app opening run on one spring (`Motion.java`) instead of timed animations; an app grows out of the
-  tile you pressed. No hardware layers, no blur.
-- **Control Centre.** The gear opens a glass panel with Wi-Fi, Bluetooth, Inputs, Settings and an AirPlay switch. Popups open upwards
-  when the anchor is low on the screen.
-- **Volume pill.** A liquid-glass level pill replaces the vendor's volume bar (`VolumeHud.java`); it needs "Display over other apps",
-  granted with `appops set com.gathin.tvhome SYSTEM_ALERT_WINDOW allow`.
-- **Weather outside.** Open-Meteo gives the temperature, wind, cloud cover, rain and US AQI for `weather_city`. A small scene
-  (sun with rays and dust, moon and stars, clouds, fog, rain, snow, storms, smog haze when the AQI is high) is drawn into its
-  own surface behind the window, at a frame rate that suits each scene, and pauses while you move the cursor. Preview any scene
-  with a `weather_override.json` in the app's files folder, for example `{"code":63,"aqi":180}`.
-- **Festivals.** Hindu festivals and Christmas by date (`res/raw/festivals.csv`, built by `tools/festival_calendar.py`): a greeting
-  such as "Happy Dhanteras Goyals!", a card with the festival and a rotating tidbit (`res/raw/festival_info.txt`), a countdown in the
-  week before, and still decorations (marigold garland, a row of diyas, fixed sparkles). Preview a date with `festival_date.txt`.
-- **Standby.** The screensaver is `AodDream`: pitch black, the left half only, white text, today in an outlined circle, nudged a few
-  pixels a minute. Google's Backdrop is disabled.
-- **AirPlay on demand.** The TV's own receiver (the FastCast system app) is off until the AirPlay tile turns it on, and stops itself
-  after 25 idle minutes (`AirPlayControl.java`). Stopping another app needs the shell's rights, so `LocalAdb.java` talks to the TV's own
-  `adbd` on localhost; approve its key once on the TV ("Always allow"). It only ever sends the fixed commands in `AirPlayControl`.
-
-Notes: the APK is about 620 KB, over the upstream 576 KB size gate, and the unit tests that read upstream's
-conventions (the Keys table, the Hebrew layout's view ids) are kept passing. `tools/festival_calendar.py` needs
-`pip install holidays astronomy-engine`. Credits: [Open-Meteo](https://open-meteo.com) (weather and air quality),
-[python-holidays](https://github.com/vacanza/python-holidays) and [astronomy-engine](https://github.com/cosinekitty/astronomy)
-(MIT) for the festival dates.
 
 ## Start here
 
