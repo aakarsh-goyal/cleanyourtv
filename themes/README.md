@@ -108,6 +108,10 @@ A new key needs one there in the same pull request.
 | `icon_only_buttons` | bool | Wi-Fi and Settings as round icon buttons; Inputs keeps its label. The VPN badge is drawn in the Wi-Fi pill's label, so with `wifi_label_width` at 0 it goes with the label: add `vpn_pill` to keep the VPN state on screen (`false` by default) |
 | `icon_only_inputs` | bool | The Inputs pill as a round icon button too, its label kept as the TalkBack description (`false` by default). Works with or without `icon_only_buttons` |
 | `top_menu` | bool | Inputs, Wi-Fi and Settings folded into one round gear, centred on the header: OK drops a menu with the three plus Reorder apps, hold OK keeps the launcher menu (`false` by default) |
+| `split_layout` | bool | Home as a static left half (greeting, big clock, date and weather, the month calendar, the focused app's name, the controls and the Wi-Fi name with its signal) and the app grid on the right, instead of the single column. Set in `config.xml` (`true` in this fork) |
+| `sort_by_usage` | bool | With `split_layout`, the grid puts the apps you open most first; a manual order from Reorder still wins. Set in `config.xml` (`true` in this fork) |
+| `weather_city` | string | A city name ("Gurugram") for the weather beside the clock, the AQI pill and the weather background, from Open-Meteo (open data, no key). Empty turns all of it off. Set in `config.xml` |
+| `weather_fahrenheit` | bool | Show the temperature in Fahrenheit. Set in `config.xml` (`false` by default) |
 | `launcher_settings_button` | bool | Make the header Settings action open Launcher settings directly with a matching 22dp home icon; also changes the Settings row when `top_menu` is on. Hold OK keeps module-card and ordering tools. The settings page includes Reorder apps and TV settings (`false` by default) |
 | `wifi_status_color` | bool | The Wi-Fi pill's icon green while the TV is online, white while it is not (`false` by default) |
 | `wifi_status_warnings` | bool | With `wifi_status_color`, the icon orange while connected without internet (a captive portal waiting for its login page) and red while offline, instead of white (`false` by default) |

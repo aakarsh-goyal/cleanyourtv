@@ -23,6 +23,41 @@
   <a href="docs/PRESS.md"><img src="docs/card.jpg" alt="450 TV models · 122 brands · 31 languages · 572 KB launcher. Featured in TechCrunch, TechRadar, Tom's Guide, Mashable, Android Authority, XDA, FlatpanelsHD, It's FOSS, Phandroid, GIGAZINE, Xataka, WinFuture, Frandroid, Macitynet, Techaeris, TechPP and 396 more: 412 articles from 54 countries. Before: stock Google TV home with a sponsored ad. After: the Clean Your TV launcher." width="800"></a>
 </p>
 
+## This fork
+
+[aakarsh-goyal/cleanyourtv](https://github.com/aakarsh-goyal/cleanyourtv) is a personal fork of the launcher, tuned for one
+Android TV 9 box (a 2 GB Realtek set) and **not meant for upstream**: it adds a network permission, Bluetooth and Wi-Fi
+switches and a local ADB client, which the project's rules keep out of the main launcher. Everything below is in
+`launcher/` and is on by default through `config.xml`.
+
+- **Split home screen.** A static left half like iPhone StandBy: greeting ("Good Evening Goyals!", set with `greeting_name`),
+  a big Roboto clock, the date, weather and AQI, a month calendar, the focused app's name, and the controls with the Wi-Fi
+  name and signal bars. The app grid sits on the right with small logos, roomy gaps, and apps sorted by how often you open them.
+- **Motion.** Focus, scrolling and app opening run on one spring (`Motion.java`) instead of timed animations; an app grows out of the
+  tile you pressed. No hardware layers, no blur.
+- **Control Centre.** The gear opens a glass panel with Wi-Fi, Bluetooth, Inputs, Settings and an AirPlay switch. Popups open upwards
+  when the anchor is low on the screen.
+- **Volume pill.** A liquid-glass level pill replaces the vendor's volume bar (`VolumeHud.java`); it needs "Display over other apps",
+  granted with `appops set com.gathin.tvhome SYSTEM_ALERT_WINDOW allow`.
+- **Weather outside.** Open-Meteo gives the temperature, wind, cloud cover, rain and US AQI for `weather_city`. A small scene
+  (sun with rays and dust, moon and stars, clouds, fog, rain, snow, storms, smog haze when the AQI is high) is drawn into its
+  own surface behind the window, at a frame rate that suits each scene, and pauses while you move the cursor. Preview any scene
+  with a `weather_override.json` in the app's files folder, for example `{"code":63,"aqi":180}`.
+- **Festivals.** Hindu festivals and Christmas by date (`res/raw/festivals.csv`, built by `tools/festival_calendar.py`): a greeting
+  such as "Happy Dhanteras Goyals!", a card with the festival and a rotating tidbit (`res/raw/festival_info.txt`), a countdown in the
+  week before, and still decorations (marigold garland, a row of diyas, fixed sparkles). Preview a date with `festival_date.txt`.
+- **Standby.** The screensaver is `AodDream`: pitch black, the left half only, white text, today in an outlined circle, nudged a few
+  pixels a minute. Google's Backdrop is disabled.
+- **AirPlay on demand.** The TV's own receiver (the FastCast system app) is off until the AirPlay tile turns it on, and stops itself
+  after 25 idle minutes (`AirPlayControl.java`). Stopping another app needs the shell's rights, so `LocalAdb.java` talks to the TV's own
+  `adbd` on localhost; approve its key once on the TV ("Always allow"). It only ever sends the fixed commands in `AirPlayControl`.
+
+Notes: the APK is about 620 KB, over the upstream 576 KB size gate, and the unit tests that read upstream's
+conventions (the Keys table, the Hebrew layout's view ids) are kept passing. `tools/festival_calendar.py` needs
+`pip install holidays astronomy-engine`. Credits: [Open-Meteo](https://open-meteo.com) (weather and air quality),
+[python-holidays](https://github.com/vacanza/python-holidays) and [astronomy-engine](https://github.com/cosinekitty/astronomy)
+(MIT) for the festival dates.
+
 ## Start here
 
 | You have | Go to |
@@ -204,6 +239,7 @@ tools/theme.sh themes/aurora                                 # push a theme; --r
 | [`tools/adb-closed.py`](tools/adb-closed.py) | Checks that the TV's network ADB port is closed once debugging is off: exits 0 when the TV refuses the connection, 1 while it is still open, 2 when nothing answered or the check itself could not run. No `nc` needed. |
 | [`tools/philips-api.py`](tools/philips-api.py) | Philips only: checks that the JointSpace control API Home Assistant uses still answers, before and after a debloat (`tools/venv/bin/python -I tools/philips-api.py <tv ip>`). Port 1926 over HTTPS first, then 1925; reads only what answers without pairing. |
 | [`tools/privacy.py`](tools/privacy.py) | Audits the TV for voice, ACR and telemetry candidates and prints the evidence for each; `--write` turns the findings into a list `disable.sh` and `restore.sh` already understand. |
+| [`tools/festival_calendar.py`](tools/festival_calendar.py) | Rebuilds the launcher's festival calendar (`res/raw/festivals.csv`) from open sources: python-holidays plus the real positions of the Sun and Moon. `--check` compares its rules with python-holidays. |
 | [`tools/theme.sh`](tools/theme.sh), [`theme_restart.py`](tools/theme_restart.py) | Push a folder from [`themes/`](themes/) to the launcher and restart Home. |
 | [`tools/manage.py`](tools/manage.py) | List every add-on, theme and switch with its screenshot, see what is on the TV, and install, update or remove one by running its creator's own script. |
 | [`tools/bench.py`](tools/bench.py) | Measures the launcher that answers HOME: key latency, how far the focus moved, janky frames, cold start, return to Home, and the idle CPU and PSS it costs. Changes nothing on the TV and writes the raw per-key numbers to JSON; no extra install. |

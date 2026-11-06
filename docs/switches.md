@@ -27,6 +27,10 @@ rule sit on its wanted list until a screenshot arrives.
 | Key | Screenshot |
 |---|---|
 | `columns` | <img src="../themes/six-columns/screenshot.jpg" width="320" alt="columns on a TV"> |
+| `split_layout` | <img src="switches/split_layout.jpg" width="320" alt="the split home screen: clock, weather, calendar and the app grid"> |
+| `sort_by_usage` | <img src="switches/sort_by_usage.jpg" width="320" alt="the grid with the most used app first"> |
+| `weather_city` | <img src="switches/weather_city.jpg" width="320" alt="the weather, AQI and sunny background for the city"> |
+| `weather_fahrenheit` | <img src="switches/weather_fahrenheit.jpg" width="320" alt="the temperature beside the clock"> |
 | `glass_style` | <img src="switches/glass_style.jpg" width="320" alt="glass_style halo on a TV"> |
 | `sky_intensity` | <img src="sky-sunset.jpg" width="320" alt="sky_intensity on a TV"> |
 | `wallpaper_rotation_minutes` | <img src="../themes/scenes/screenshot.jpg" width="320" alt="wallpaper_rotation_minutes on a TV"> |
